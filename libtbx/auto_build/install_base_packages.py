@@ -541,6 +541,29 @@ Installation of Python packages may fail.
     if (confirm_import_module is not None) :
       self.verify_python_module(pkg_name_label, confirm_import_module)
 
+  def build_python_module_pypi(self,
+      pkg_name,
+      pkg_version="",
+      callback_before_install=None,
+      callback_after_install=None,
+      confirm_import_module=None):
+    pkg_log = self.start_building_package(pkg_name)
+    debug_flag = ""
+    if self.options.debug:
+      debug_flag = "-v"
+    self.call("%s -m pip install --download . --no-binary :all: %s %s%s" % (self.python_exe, debug_flag, pkg_name, pkg_version),
+      log=pkg_log)
+    if self.check_download_only(pkg_name): return
+    if callback_before_install:
+      assert callback_before_install(pkg_log)
+    self.call("%s -m pip install --no-index -f . --no-binary :all: %s %s%s" % (self.python_exe, debug_flag, pkg_name, pkg_version),
+      log=pkg_log)
+    if callback_after_install:
+      assert callback_after_install(pkg_log)
+    print self.tmp_dir
+    print "XXXXXX^^^^XXXXXXXXXXXXXXXX"
+    os.chdir(self.tmp_dir)
+
   def check_dependencies(self, packages=None):
     packages = packages or []
     if 'scipy' in packages:
@@ -801,10 +824,13 @@ _replace_sysconfig_paths(build_time_vars)
       pkg_name_label="junit_xml")
 
   def build_pytest(self):
+    self.build_python_module_pypi(
+      pkg_name="pytest",
+      pkg_version="==2.9.1")
     for package, name in [
-        (PYTEST_DEP_PY, 'py'),
-        (PYTEST_DEP_COLORAMA, 'colorama'),
-        (PYTEST_PKG, 'pytest'),
+#        (PYTEST_DEP_PY, 'py'),
+#        (PYTEST_DEP_COLORAMA, 'colorama'),
+#        (PYTEST_PKG, 'pytest'),
         (MOCK_DEP_PBR, 'pbr'),
         (MOCK_DEP_FUNC_DICT, 'ordereddict'),
         (MOCK_DEP_FUNC, 'funcsigs'),
