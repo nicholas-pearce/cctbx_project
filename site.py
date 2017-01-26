@@ -27,6 +27,8 @@
 # to enable the predictive caching mechanism.
 # If you want to see a running commentary of what is happening, set
 #   LIBTBX_IMPORTCACHE_DEBUG
+# or
+#   LIBTBX_IMPORTCACHE_TIME
 # as well.
 #
 #
@@ -53,17 +55,12 @@ _libtbx = {}
 pkgutil = None
 if hasattr(os, 'getenv') and os.getenv('LIBTBX_IMPORTCACHE'):
   try:
-    _libtbx_debug = os.getenv('LIBTBX_IMPORTCACHE_DEBUG')
-    if _libtbx_debug:
-      print('libtbx.importcache enabled')
     import pkgutil
   except ImportError:
     pkgutil = None
 
 if pkgutil:
-  class _PredictiveImportCache(object):
-    cache = {}
-    '''A 'module name' -> 'loading solution' dictionary.'''
+  class _PredictiveImport(object):
     import_path = {}
     '''Dictionary of examined sys.path elements.
        Values are 'False' if the path element is not a valid path.
@@ -73,45 +70,25 @@ if pkgutil:
        Value is a special loader if the path element is handled by this.'''
 
     def __init__(self):
-      if not _libtbx_debug:
-        self.debug = self.nop
+      if os.getenv('LIBTBX_IMPORTCACHE_DEBUG'):
+        self.debug = self.debug_print
       if os.getenv('LIBTBX_IMPORTCACHE_TIME'):
         import time
         self.time = time.time
         self.start = time.time()
-        self.debug = self.debug_time
+        self.debug = self.debug_print_time
+      self.debug('libtbx.importcache enabled')
 
     def debug(self, message):
-      print("importcache: " + message)
-
-    def debug_time(self, message):
-      print("importcache %8.3f: " % (self.time() - self.start) + message)
-
-    def nop(self, message):
       pass
 
-    def find_module(self, fullname, path=None):
-      if False and fullname in self.cache:
-        # Cached location available for requested module
-        solution = self.cache[fullname]
-        if isinstance(solution, list): # list in ImpLoader format
-          self.debug("using cached solution for " + fullname + " : " + str(solution))
-          if solution[0]:
-            fh = open(solution[1], solution[2][1])
-          else:
-            fh = None
-          return pkgutil.ImpLoader(fullname, fh, solution[1], solution[2])
-        elif solution:                 # loader object
-          self.debug("found cached loader for " + fullname + " : " + str(solution))
-          return solution
-        else:
-          # Previously seen module that can't be cached for other reasons
-          # These can be:
-          #   - non-existing
-          #   - requiring other importers (eg. .egg-files)
-          # Passes on to regular import function
-          return None
+    def debug_print(self, message):
+      print("predictive import: " + message)
 
+    def debug_print_time(self, message):
+      print("predictive import %8.3f: " % (self.time() - self.start) + message)
+
+    def find_module(self, fullname, path=None):
       if '.' in fullname:
         # Caching deals only with top level packages
         rdot = fullname.rindex('.')
@@ -124,6 +101,7 @@ if pkgutil:
           if solution:
             return solution
         self.debug("no such luck")
+        raise ImportError('No module named ' + fullname)
         return None
 
       self.debug("trying to predict location of " + fullname)
@@ -136,7 +114,6 @@ if pkgutil:
       if imp.is_builtin(fullname):
         self.debug("identified " + fullname + " as builtin")
         solution = (None, fullname, ('', '', imp.C_BUILTIN))
-        self.cache[fullname] = (solution[0] is not None, ) + solution[1:]
         return pkgutil.ImpLoader(fullname, *solution)
 
       # TODO: Frozen?
@@ -158,7 +135,6 @@ if pkgutil:
         module_loader = self.loader_path[directory].find_module(module)
         if module_loader:
           self.debug("module found.")
-          self.cache[fullname] = module_loader # TODO: correct re reload() semantics?
           return module_loader
 
       if self.import_path[directory]:
@@ -170,17 +146,14 @@ if pkgutil:
             if os.path.isdir(full_pathname) and os.path.exists(os.path.join(full_pathname, '__init__.py')):
               solution = (None, full_pathname, ('', '', imp.PKG_DIRECTORY))
               self.debug("predicted solution: " + str(solution))
-              self.cache[fullname] = (solution[0] is not None, ) + solution[1:]
               return pkgutil.ImpLoader(fullname, *solution)
-          else:
-            for suffix in imp.get_suffixes():
-              if suffix[0] in self.import_path[directory][module]:
-                filename = os.path.join(directory, module + suffix[0])
-                fh = open(filename, suffix[1])
-                solution = (fh, filename, suffix)
-                self.debug("predicted solution: " + str(solution))
-                self.cache[fullname] = (solution[0] is not None, ) + solution[1:]
-                return pkgutil.ImpLoader(fullname, *solution)
+          for suffix in imp.get_suffixes():
+            if suffix[0] in self.import_path[directory][module]:
+              filename = os.path.join(directory, module + suffix[0])
+              fh = open(filename, suffix[1])
+              solution = (fh, filename, suffix)
+              self.debug("predicted solution: " + str(solution))
+              return pkgutil.ImpLoader(fullname, *solution)
 
     def examine_path(self, path):
       self.import_path[path] = False
@@ -212,7 +185,7 @@ if pkgutil:
             self.import_path[path][basename] = [ suffix ] + self.import_path[path].get(basename, [])
             self.debug("Found in " + path + ": " + basename + " (by extension)")
 
-  _libtbx_cache = _PredictiveImportCache()
+  _libtbx_cache = _PredictiveImport()
   sys.meta_path.append(_libtbx_cache)
 
 
