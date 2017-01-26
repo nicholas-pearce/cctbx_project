@@ -75,20 +75,23 @@ if pkgutil:
     def __init__(self):
       if not _libtbx_debug:
         self.debug = self.nop
+      if os.getenv('LIBTBX_IMPORTCACHE_TIME'):
+        import time
+        self.time = time.time
+        self.start = time.time()
+        self.debug = self.debug_time
 
     def debug(self, message):
       print("importcache: " + message)
+
+    def debug_time(self, message):
+      print("importcache %8.3f: " % (self.time() - self.start) + message)
 
     def nop(self, message):
       pass
 
     def find_module(self, fullname, path=None):
-      if '.' in fullname:
-        # Caching deals only with top level packages
-        self.debug("ignoring call for " + fullname + " (" + str(path) + ")")
-        return None
-
-      if fullname in self.cache:
+      if False and fullname in self.cache:
         # Cached location available for requested module
         solution = self.cache[fullname]
         if isinstance(solution, list): # list in ImpLoader format
@@ -109,43 +112,25 @@ if pkgutil:
           # Passes on to regular import function
           return None
 
+      if '.' in fullname:
+        # Caching deals only with top level packages
+        rdot = fullname.rindex('.')
+        head = fullname[:rdot] # 'logging'
+        tail = fullname[rdot+1:] # 'os'
+        #self.debug("ignoring call for " + fullname + " (" + str(path) + ")")
+        self.debug("trying to predict location of " + fullname + " within " + str(path))
+        for directory in path:
+          solution = self.find_in_directory(tail, fullname, directory)
+          if solution:
+            return solution
+        self.debug("no such luck")
+        return None
+
       self.debug("trying to predict location of " + fullname)
-      for path in sys.path:
-        if path == '': path = '.'
-
-        if path not in self.import_path:
-          # If path has not been seen before gather information about it
-          self.examine_path(path)
-
-        if path in self.loader_path:
-          # Path element has a special handler. Ask for module.
-          self.debug("checking " + fullname + " with " + str(self.loader_path[path]))
-          module_loader = self.loader_path[path].find_module(fullname)
-          if module_loader:
-            self.debug("module found.")
-            self.cache[fullname] = module_loader # TODO: correct re reload() semantics?
-            return self.cache[fullname]
-
-        if self.import_path[path]:
-          # Path element is a regular directory. Try finding the module in here.
-          if self.import_path[path].get(fullname):
-            # Match found.
-            if imp.PKG_DIRECTORY in self.import_path[path][fullname]:
-              full_pathname = os.path.join(path, fullname)
-              if os.path.isdir(full_pathname) and os.path.exists(os.path.join(full_pathname, '__init__.py')):
-                solution = (None, full_pathname, ('', '', imp.PKG_DIRECTORY))
-                self.debug("predicted solution: " + str(solution))
-                self.cache[fullname] = (solution[0] is not None, ) + solution[1:]
-                return pkgutil.ImpLoader(fullname, *solution)
-            else:
-              for suffix in imp.get_suffixes():
-                if suffix[0] in self.import_path[path][fullname]:
-                  filename = os.path.join(path, fullname + suffix[0])
-                  fh = open(filename, suffix[1])
-                  solution = (fh, filename, suffix)
-                  self.debug("predicted solution: " + str(solution))
-                  self.cache[fullname] = (solution[0] is not None, ) + solution[1:]
-                  return pkgutil.ImpLoader(fullname, *solution)
+      for directory in sys.path:
+        solution = self.find_in_directory(fullname, fullname, directory)
+        if solution:
+          return solution
 
       # No match found in paths. Check if this is a builtin module
       if imp.is_builtin(fullname):
@@ -159,6 +144,43 @@ if pkgutil:
       # Still no match. This might not exist
       self.debug("Import " + fullname + " failed: not found")
       raise ImportError('No module named ' + fullname)
+
+    def find_in_directory(self, module, fullname, directory):
+      if directory == '': directory = '.'
+
+      if directory not in self.import_path:
+        # If directory has not been seen before gather information about it
+        self.examine_path(directory)
+
+      if directory in self.loader_path:
+        # Path element has a special handler. Ask for module.
+        self.debug("checking " + fullname + " with " + str(self.loader_path[directory]))
+        module_loader = self.loader_path[directory].find_module(module)
+        if module_loader:
+          self.debug("module found.")
+          self.cache[fullname] = module_loader # TODO: correct re reload() semantics?
+          return module_loader
+
+      if self.import_path[directory]:
+        # Path element is a regular directory. Try finding the module in here.
+        if self.import_path[directory].get(module):
+          # Match found.
+          if imp.PKG_DIRECTORY in self.import_path[directory][module]:
+            full_pathname = os.path.join(directory, module)
+            if os.path.isdir(full_pathname) and os.path.exists(os.path.join(full_pathname, '__init__.py')):
+              solution = (None, full_pathname, ('', '', imp.PKG_DIRECTORY))
+              self.debug("predicted solution: " + str(solution))
+              self.cache[fullname] = (solution[0] is not None, ) + solution[1:]
+              return pkgutil.ImpLoader(fullname, *solution)
+          else:
+            for suffix in imp.get_suffixes():
+              if suffix[0] in self.import_path[directory][module]:
+                filename = os.path.join(directory, module + suffix[0])
+                fh = open(filename, suffix[1])
+                solution = (fh, filename, suffix)
+                self.debug("predicted solution: " + str(solution))
+                self.cache[fullname] = (solution[0] is not None, ) + solution[1:]
+                return pkgutil.ImpLoader(fullname, *solution)
 
     def examine_path(self, path):
       self.import_path[path] = False
