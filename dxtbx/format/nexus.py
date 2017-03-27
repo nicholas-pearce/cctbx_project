@@ -1153,6 +1153,11 @@ class DataList(object):
       (slice(i, i+1, 1),
        slice(0, height, 1),
        slice(0, width, 1)))
+
+    # cope with unmasked, transient hot pixels
+    absurd = data_as_flex > 1048576
+    data_as_flex.set_selected(absurd, -2)
+
     data_as_flex.reshape(flex.grid(data_as_flex.all()[1:]))
     return data_as_flex
 
