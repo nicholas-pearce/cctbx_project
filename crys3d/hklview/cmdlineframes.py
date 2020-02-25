@@ -230,7 +230,7 @@ from libtbx.utils import Sorry, to_str
 from libtbx import group_args
 import libtbx
 import traceback
-import sys, zmq, threading,  time, cmath, zlib
+import sys, zmq, threading,  time, cmath, zlib, os.path
 
 from six.moves import input
 
@@ -262,8 +262,6 @@ class settings_window () :
 
 class HKLViewFrame() :
   def __init__ (self, *args, **kwds) :
-    print("kwds= ", kwds)
-    print("args= ", *args)
     self.valid_arrays = []
     self.spacegroup_choices = []
     self.procarrays = []
@@ -273,12 +271,14 @@ class HKLViewFrame() :
     self.verbose = 0
     if 'verbose' in kwds:
       self.verbose = eval(kwds['verbose'])
+    self.guiSocketPort=None
+    self.mprint("kwds= " +str(kwds), 1)
+    self.mprint("args= " + str(args), 1)
     kwds['settings'] = self.settings
     kwds['mprint'] = self.mprint
     self.infostr = ""
     self.hklfile_history = []
     self.tncsvec = None
-    self.guiSocketPort=None
     self.new_miller_array_operations_lst = []
     self.zmqsleeptime = 0.1
     if 'useGuiSocket' in kwds:
@@ -287,7 +287,7 @@ class HKLViewFrame() :
       self.guisocket = self.context.socket(zmq.PAIR)
       self.guisocket.connect("tcp://127.0.0.1:%s" %self.guiSocketPort )
       self.STOP = False
-      print("starting socketthread")
+      self.mprint("starting socketthread", 1)
       self.msgqueuethrd = threading.Thread(target = self.zmq_listen )
       self.msgqueuethrd.daemon = True
       self.msgqueuethrd.start()
@@ -298,16 +298,17 @@ class HKLViewFrame() :
     self.ResetPhilandViewer()
     self.idx_data = None
     self.NewFileLoaded = False
+    self.loaded_file_name = ""
     self.hklin = None
     if 'hklin' in kwds or 'HKLIN' in kwds:
-      self.hklin = kwds['hklin']
+      self.hklin = kwds.get('hklin', kwds.get('HKLIN') )
       self.LoadReflectionsFile(self.hklin)
 
 
   def __exit__(self, exc_type=None, exc_value=0, traceback=None):
     self.viewer.__exit__(exc_type, exc_value, traceback)
     del self.viewer
-    self.mprint("Exiting HKLViewFrame", verbose=0)
+    self.mprint("Destroying HKLViewFrame", verbose=0) # this string is expected by HKLviewer.py so don't change
     self.STOP = True
     del self
 
@@ -340,7 +341,7 @@ class HKLViewFrame() :
         time.sleep(self.zmqsleeptime)
       except Exception as e:
         self.mprint( str(e) + traceback.format_exc(limit=10), verbose=1)
-    self.mprint( "Exiting zmq_listen() thread", 1)
+    self.mprint( "Shutting down zmq_listen() thread", 1)
     del self.guisocket
     self.guiSocketPort=None
 
@@ -383,7 +384,9 @@ class HKLViewFrame() :
 
 
   def GetNewCurrentPhilFromPython(self, pyphilobj, oldcurrentphil):
-    newcurrentphil = oldcurrentphil.fetch(source = pyphilobj)
+    newcurrentphil, unusedphilparms = oldcurrentphil.fetch(source = pyphilobj, track_unused_definitions=True)
+    for parm in unusedphilparms:
+      self.mprint( "Received unrecognised phil parameter: " + parm.path, verbose=1)
     diffphil = oldcurrentphil.fetch_diff(source = pyphilobj)
     oldcolbintrshld = oldcurrentphil.extract().NGL_HKLviewer.scene_bin_thresholds
     newcolbintrshld = oldcolbintrshld
@@ -714,8 +717,10 @@ class HKLViewFrame() :
       self.settings = display.settings()
       self.viewer.settings = self.params.NGL_HKLviewer.viewer
       self.viewer.mapcoef_fom_dict = {}
+      self.viewer.sceneid_from_arrayid = []
       self.hklfile_history = []
       self.tncsvec = None
+      self.loaded_file_name = ""
       try :
         hkl_file = any_reflection_file(file_name)
         arrays = hkl_file.as_miller_arrays(merge_equivalents=False,
@@ -723,6 +728,7 @@ class HKLViewFrame() :
         #arrays = f.file_server.miller_arrays
         if hkl_file._file_type == 'ccp4_mtz':
           self.hklfile_history = list(hkl_file._file_content.history())
+          self.loaded_file_name = file_name
           for e in self.hklfile_history:
             if "TNCS NMOL" in e and "VECTOR" in e:
               svec = e.split()[-3:]
@@ -782,7 +788,7 @@ class HKLViewFrame() :
 
 
   def SaveReflectionsFile(self, savefilename):
-    if self.params.NGL_HKLviewer.openfilename == savefilename:
+    if self.loaded_file_name == savefilename:
       self.mprint("Not overwriting currently loaded file. Choose a different name!")
       return
     mtz1 = self.procarrays[0].as_mtz_dataset(column_root_label= self.procarrays[0].info().labels[0])
@@ -1113,6 +1119,9 @@ class HKLViewFrame() :
       philstrvalsdict[e.path] = e.object.extract()
     mydict = { "current_phil_strings": philstrvalsdict }
     self.SendInfoToGUI(mydict)
+    if self.viewer.params.viewer.scene_id is not None:
+      self.SendInfoToGUI({ "used_nth_power_scale_radii": self.viewer.HKLscenes[int(self.viewer.params.viewer.scene_id)].nth_power_scale_radii })
+
 
 
   def GetHtmlURL(self):
@@ -1175,9 +1184,9 @@ NGL_HKLviewer {
     .type = bool
   mouse_moved = False
     .type = bool
-  show_real_space_unit_cell = None
+  real_space_unit_cell_scale_fraction = None
     .type = float
-  show_reciprocal_unit_cell = None
+  reciprocal_unit_cell_scale_fraction = None
     .type = float
   clip_plane {
     h = 2.0
@@ -1230,6 +1239,12 @@ def run():
   utility function for passing keyword arguments more directly to HKLViewFrame()
   """
   kwargs = dict(arg.split('=') for arg in sys.argv[1:] if '=' in arg)
+  #check if any argument is a filename
+  for arg in sys.argv[1:]:
+    # if so add it as a keyword argument
+    if os.path.isfile(arg) and '=' not in arg:
+      kwargs['hklin'] = arg
+
   myHKLview = HKLViewFrame(**kwargs)
 
 

@@ -11,7 +11,7 @@
 #-------------------------------------------------------------------------------
 from __future__ import absolute_import, division, print_function
 
-from PySide2.QtCore import Qt, QEvent, QSize, QTimer
+from PySide2.QtCore import Qt, QEvent, QSize, QSettings, QTimer
 from PySide2.QtWidgets import (  QAction, QApplication, QCheckBox,
         QComboBox, QDialog,
         QFileDialog, QGridLayout, QGroupBox, QHeaderView, QHBoxLayout, QLabel, QLineEdit,
@@ -72,9 +72,10 @@ class SettingsForm(QDialog):
     layout.addWidget(parent.bufsize_labeltxt,        3, 0, 1, 1)
     layout.addWidget(parent.bufsizespinBox,          3, 4, 1, 1)
 
-    layout.addWidget(parent.ttipNoneradio,           4, 0, 1, 1)
+    layout.addWidget(parent.ttiplabeltxt,            4, 0, 1, 1)
     layout.addWidget(parent.ttipClickradio,          4, 1, 1, 1)
     layout.addWidget(parent.ttipHoverradio,          4, 2, 1, 1)
+    layout.addWidget(parent.ttipalphalabeltxt,       4, 3, 1, 1)
     layout.addWidget(parent.ttipalpha_spinBox,       4, 4, 1, 1)
 
     layout.setRowStretch (0, 1)
@@ -107,6 +108,7 @@ class NGL_HKLViewer(HKLviewerGui.Ui_MainWindow):
     self.actionSettings.triggered.connect(self.SettingsDialog)
     self.actionExit.triggered.connect(self.window.close)
     self.actionSave_reflection_file.triggered.connect(self.onSaveReflectionFile)
+    self.functionTabWidget.setCurrentIndex(0) # if accidentally set to a different tab in the Qtdesigner
 
     self.UseOSBrowser = False
     self.devmode = False
@@ -119,7 +121,6 @@ class NGL_HKLViewer(HKLviewerGui.Ui_MainWindow):
     self.zmq_context = None
     self.unfeedback = False
 
-    self.originalPalette = QApplication.palette()
     self.mousespeed_labeltxt = QLabel()
     self.mousespeed_labeltxt.setText("Mouse speed:")
     self.mousemoveslider = QSlider(Qt.Horizontal)
@@ -152,11 +153,10 @@ class NGL_HKLViewer(HKLviewerGui.Ui_MainWindow):
     self.bufsizespinBox.setValue(10)
     self.bufsize_labeltxt = QLabel()
     self.bufsize_labeltxt.setText("Text buffer size (Kbytes):")
-
-
-    self.ttipNoneradio = QRadioButton()
-    self.ttipNoneradio.setText( "None")
-    self.ttipNoneradio.clicked.connect(self.onShowTooltips)
+    self.ttiplabeltxt = QLabel()
+    self.ttiplabeltxt.setText("Tooltips")
+    self.ttipalphalabeltxt = QLabel()
+    self.ttipalphalabeltxt.setText("Opacity:")
     self.ttipHoverradio = QRadioButton()
     self.ttipHoverradio.setText( "Hovering")
     self.ttipHoverradio.clicked.connect(self.onShowTooltips)
@@ -257,8 +257,7 @@ class NGL_HKLViewer(HKLviewerGui.Ui_MainWindow):
     self.PhilToJsRender('NGL_HKLviewer.action = is_terminating')
     self.closing = True
     self.window.setVisible(False)
-    del self.webprofile
-    del self.webpage
+    self.webpage.deleteLater() # avoid "Release of profile requested but WebEnginePage still not deleted. Expect troubles !"
     print("HKLviewer closing down...")
     nc = 0
     sleeptime = 0.2
@@ -271,12 +270,10 @@ class NGL_HKLViewer(HKLviewerGui.Ui_MainWindow):
     self.cctbxproc.wait()
     self.BrowserBox.close()
     self.BrowserBox.deleteLater()
-    #self.BrowserBox.destroy()
     event.accept()
 
 
   def InitBrowser(self):
-    self.BrowserBox.setAttribute(Qt.WA_DeleteOnClose)
     # omitting name for QWebEngineProfile() means it is private/off-the-record with no cache files
     self.webprofile = QWebEngineProfile(parent=self.BrowserBox)
     self.webpage = QWebEnginePage( self.webprofile, self.BrowserBox)
@@ -287,6 +284,7 @@ class NGL_HKLViewer(HKLviewerGui.Ui_MainWindow):
       self.webpage.setUrl("https://cctbx.github.io/")
     self.cpath = self.webprofile.cachePath()
     self.BrowserBox.setPage(self.webpage)
+    self.BrowserBox.setAttribute(Qt.WA_DeleteOnClose)
 
 
   def onOpenReflectionFile(self):
@@ -456,7 +454,7 @@ class NGL_HKLViewer(HKLviewerGui.Ui_MainWindow):
             if self.closing:
               print(currentinfostr)
 
-            if "Exiting HKLViewFrame" in currentinfostr:
+            if "Destroying HKLViewFrame" in currentinfostr:
               self.canexit = True
 
           if self.infodict.get("tncsvec"):
@@ -467,7 +465,6 @@ class NGL_HKLViewer(HKLviewerGui.Ui_MainWindow):
             self.clipTNCSBtn.setEnabled(True)
 
           if self.infodict.get("file_name"):
-            #self.HKLnameedit.setText( self.infodict.get("file_name", "") )
             self.window.setWindowTitle("HKL-viewer: " + self.infodict.get("file_name", "") )
 
           if self.infodict.get("NewFileLoaded"):
@@ -478,6 +475,11 @@ class NGL_HKLViewer(HKLviewerGui.Ui_MainWindow):
 
           if self.infodict.get("NewMillerArray"):
             self.NewMillerArray = self.infodict.get("NewMillerArray",False)
+
+          if self.infodict.get("used_nth_power_scale_radii", None) is not None:
+            self.unfeedback = True
+            self.power_scale_spinBox.setValue( self.infodict.get("used_nth_power_scale_radii", 0.0))
+            self.unfeedback = False
 
           self.fileisvalid = True
           #print("ngl_hkl_infodict: " + str(ngl_hkl_infodict))
@@ -529,68 +531,8 @@ class NGL_HKLViewer(HKLviewerGui.Ui_MainWindow):
 
 
   def UpdateGUI(self):
-    """
-    NGL_HKLviewer.viewer.scale_colors_multiplicity, False
-    #NGL_HKLviewer.viewer.nth_power_scale_radii, -1
-    #NGL_HKLviewer.viewer.slice_mode, False
-    NGL_HKLviewer.viewer.uniform_size, False
-    NGL_HKLviewer.tabulate_miller_array_ids, []
-    #NGL_HKLviewer.clip_plane.l, 0
-    #NGL_HKLviewer.viewer.expand_to_p1, False
-    #NGL_HKLviewer.clip_plane.h, 2
-    NGL_HKLviewer.viewer.sigma_radius, False
-    NGL_HKLviewer.viewer.map_to_asu, False
-    #NGL_HKLviewer.clip_plane.k, 0
-    #NGL_HKLviewer.viewer.show_systematic_absences, False
-    #NGL_HKLviewer.viewer.NGL.tooltip_alpha, 0.85
-    NGL_HKLviewer.viewer.d_min, None
-    NGL_HKLviewer.tooltips_in_script, False
-    NGL_HKLviewer.using_space_subgroup, False
-    #NGL_HKLviewer.viewer.expand_anomalous, False
-    #NGL_HKLviewer.viewer.scale, 1
-    #NGL_HKLviewer.filename, C:/Users/oeffner/Buser/NGL_HKLviewer/mymtz.mtz
-    NGL_HKLviewer.viewer.scale_radii_multiplicity, False
-    NGL_HKLviewer.viewer.data, None
-    #NGL_HKLviewer.viewer.NGL.mouse_sensitivity, 0.2
-    NGL_HKLviewer.action, *'is_running'
-    #NGL_HKLviewer.clip_plane.angle_around_vector, 0
-    #NGL_HKLviewer.viewer.slice_index, 0
-    NGL_HKLviewer.shape_primitive, *'spheres'
-    #NGL_HKLviewer.nbins, 6
-    #NGL_HKLviewer.clip_plane.hkldist, 0
-    NGL_HKLviewer.viewer.phase_color, False
-    NGL_HKLviewer.viewer.show_labels, True
-    NGL_HKLviewer.viewer.labels, None
-    NGL_HKLviewer.viewer.show_anomalous_pairs, False
-    NGL_HKLviewer.miller_array_operations,
-    NGL_HKLviewer.viewer.symmetry_file, None
-    #NGL_HKLviewer.spacegroup_choice, None
-    #NGL_HKLviewer.clip_plane.is_parallel, False
-    NGL_HKLviewer.scene_bin_thresholds, None
-    NGL_HKLviewer.viewer.scene_id, 3
-    NGL_HKLviewer.viewer.color_scheme, *rainbow
-    NGL_HKLviewer.viewer.black_background, True
-    NGL_HKLviewer.viewer.show_axes, True
-    NGL_HKLviewer.bin_scene_label, Resolution
-    NGL_HKLviewer.merge_data, False
-    NGL_HKLviewer.mouse_moved, True
-    #NGL_HKLviewer.viewer.show_missing, False
-    NGL_HKLviewer.viewer.slice_axis, *h
-    NGL_HKLviewer.viewer.keep_constant_scale, True
-    NGL_HKLviewer.viewer.show_data_over_sigma, False
-    NGL_HKLviewer.viewer.NGL.camera_type, *orthographic
-    NGL_HKLviewer.clip_plane.clipwidth, None
-    NGL_HKLviewer.viewer.sqrt_scale_colors, False
-    NGL_HKLviewer.viewer.sigma_color, False
-    NGL_HKLviewer.clip_plane.is_real_space_frac_vec, False
-    NGL_HKLviewer.viewer.NGL.fixorientation, False
-    NGL_HKLviewer.viewer.inbrowser, True
-    NGL_HKLviewer.viewer.show_only_missing, False
-    NGL_HKLviewer.viewer.NGL.bin_opacities, [(1.0, 0), (1.0, 1), (1.0, 2)]
-    NGL_HKLviewer.clip_plane.bequiet, False
-    """
     self.unfeedback = True
-    self.power_scale_spinBox.setValue( self.currentphilstringdict['NGL_HKLviewer.viewer.nth_power_scale_radii'])
+    self.power_scale_spinBox.setEnabled( self.currentphilstringdict['NGL_HKLviewer.viewer.nth_power_scale_radii'] >= 0.0 )
     self.ManualPowerScalecheckbox.setChecked( self.currentphilstringdict['NGL_HKLviewer.viewer.nth_power_scale_radii'] >= 0.0 )
     self.radii_scale_spinBox.setValue( self.currentphilstringdict['NGL_HKLviewer.viewer.scale'])
     self.showsliceGroupCheckbox.setChecked( self.currentphilstringdict['NGL_HKLviewer.viewer.slice_mode'])
@@ -614,6 +556,7 @@ class NGL_HKLViewer(HKLviewerGui.Ui_MainWindow):
       self.SpaceGroupComboBox.setCurrentIndex(  self.currentphilstringdict['NGL_HKLviewer.spacegroup_choice'] )
     self.clipParallelBtn.setChecked( self.currentphilstringdict['NGL_HKLviewer.clip_plane.is_parallel'])
     self.missingcheckbox.setChecked( self.currentphilstringdict['NGL_HKLviewer.viewer.show_missing'])
+    self.onlymissingcheckbox.setEnabled( self.currentphilstringdict['NGL_HKLviewer.viewer.show_missing'] )
     axidx = -1
     for axidx,c in enumerate(self.sliceaxis.values()):
       if c in self.currentphilstringdict['NGL_HKLviewer.viewer.slice_axis']:
@@ -630,21 +573,17 @@ class NGL_HKLViewer(HKLviewerGui.Ui_MainWindow):
     self.clipTNCSBtn.setChecked( "tncs" in self.currentphilstringdict['NGL_HKLviewer.clip_plane.fractional_vector'])
     self.fixedorientcheckbox.setChecked( self.currentphilstringdict['NGL_HKLviewer.viewer.NGL.fixorientation'])
     self.onlymissingcheckbox.setChecked( self.currentphilstringdict['NGL_HKLviewer.viewer.show_only_missing'])
-    if self.currentphilstringdict['NGL_HKLviewer.show_real_space_unit_cell'] is not None:
+    if self.currentphilstringdict['NGL_HKLviewer.real_space_unit_cell_scale_fraction'] is not None:
       self.DrawRealUnitCellBox.setChecked(True)
-      self.unitcellslider.setValue( self.currentphilstringdict['NGL_HKLviewer.show_real_space_unit_cell'])
+      self.unitcellslider.setValue( self.currentphilstringdict['NGL_HKLviewer.real_space_unit_cell_scale_fraction'] * self.unitcellslider.maximum())
     else:
       self.DrawRealUnitCellBox.setChecked(False)
-    if self.currentphilstringdict['NGL_HKLviewer.show_reciprocal_unit_cell'] is not None:
+    if self.currentphilstringdict['NGL_HKLviewer.reciprocal_unit_cell_scale_fraction'] is not None:
       self.DrawReciprocUnitCellBox.setChecked(True)
-      self.reciprocunitcellslider.setValue( self.currentphilstringdict['NGL_HKLviewer.show_reciprocal_unit_cell'])
+      self.reciprocunitcellslider.setValue( self.currentphilstringdict['NGL_HKLviewer.reciprocal_unit_cell_scale_fraction'] * self.reciprocunitcellslider.maximum())
     else:
       self.DrawReciprocUnitCellBox.setChecked(False)
-
-
     self.unfeedback = False
-
-    pass
 
 
 
@@ -698,8 +637,6 @@ class NGL_HKLViewer(HKLviewerGui.Ui_MainWindow):
       self.PhilToJsRender("NGL_HKLviewer.viewer.NGL.show_tooltips = click")
     if self.ttipHoverradio.isChecked():
       self.PhilToJsRender("NGL_HKLviewer.viewer.NGL.show_tooltips = hover")
-    if self.ttipNoneradio.isChecked():
-      self.PhilToJsRender("NGL_HKLviewer.viewer.NGL.show_tooltips = none")
 
 
   def onFontsizeChanged(self, val):
@@ -749,8 +686,14 @@ class NGL_HKLViewer(HKLviewerGui.Ui_MainWindow):
   def showMissing(self):
     if self.missingcheckbox.isChecked():
       self.PhilToJsRender('NGL_HKLviewer.viewer.show_missing = True')
+      self.onlymissingcheckbox.setEnabled(True)
     else:
-      self.PhilToJsRender('NGL_HKLviewer.viewer.show_missing = False')
+      self.PhilToJsRender("""NGL_HKLviewer.viewer {
+                                                     show_missing = False
+                                                     show_only_missing = False
+                                                   }
+                          """)
+      self.onlymissingcheckbox.setEnabled(False)
 
 
   def showOnlyMissing(self):
@@ -973,10 +916,10 @@ class NGL_HKLViewer(HKLviewerGui.Ui_MainWindow):
       return
     if self.ManualPowerScalecheckbox.isChecked():
       self.PhilToJsRender('NGL_HKLviewer.viewer.nth_power_scale_radii = %f' %self.power_scale_spinBox.value())
-      self.power_scale_spinBox.setEnabled(True)
+      #self.power_scale_spinBox.setEnabled(True)
     else:
       self.PhilToJsRender('NGL_HKLviewer.viewer.nth_power_scale_radii = -1.0')
-      self.power_scale_spinBox.setEnabled(False)
+      #self.power_scale_spinBox.setEnabled(False)
 
 
   def createExpansionBox(self):
@@ -1002,9 +945,6 @@ class NGL_HKLViewer(HKLviewerGui.Ui_MainWindow):
     self.SliceLabelComboBox.activated.connect(self.onSliceComboSelchange)
     self.sliceaxis = { 0:"h", 1:"k", 2:"l" }
     self.SliceLabelComboBox.addItems( list( self.sliceaxis.values()) )
-    self.SliceLabelComboBox.setDisabled(True)
-    self.sliceindexspinBox.setDisabled(True)
-
     self.fixedorientcheckbox.clicked.connect(self.onFixedorient)
     self.recipvecBtn.setText("as fractional values in reciprocal space")
     self.recipvecBtn.setChecked(False)
@@ -1124,7 +1064,7 @@ class NGL_HKLViewer(HKLviewerGui.Ui_MainWindow):
       self.showsliceGroupCheckbox.setChecked(True)
       self.PhilToJsRender("""NGL_HKLviewer.viewer.slice_mode = True
                              NGL_HKLviewer.clip_plane.clipwidth = None
-                          """)
+                           """)
 
 
   def onRotaVecAngleChanged(self, val):
@@ -1176,22 +1116,6 @@ class NGL_HKLViewer(HKLviewerGui.Ui_MainWindow):
     if not self.unfeedback:
       self.PhilToJsRender('NGL_HKLviewer.viewer.NGL.fixorientation = %s' \
                                     %str(self.fixedorientcheckbox.isChecked()))
-
-
-  def onDrawReciprocUnitCellBoxClick(self):
-    if not self.unfeedback:
-      if self.DrawReciprocUnitCellBox.isChecked():
-        self.PhilToJsRender("NGL_HKLviewer.show_reciprocal_unit_cell = %f" %self.reciprocunitcellslider.value())
-      else:
-        self.PhilToJsRender("NGL_HKLviewer.show_reciprocal_unit_cell = None")
-
-
-  def onDrawUnitCellBoxClick(self):
-    if not self.unfeedback:
-      if self.DrawRealUnitCellBox.isChecked():
-        self.PhilToJsRender("NGL_HKLviewer.show_real_space_unit_cell = %f" %self.unitcellslider.value())
-      else:
-        self.PhilToJsRender("NGL_HKLviewer.show_real_space_unit_cell = None")
 
 
   def onMillerTableCellPressed(self, row, col):
@@ -1350,16 +1274,36 @@ class NGL_HKLViewer(HKLviewerGui.Ui_MainWindow):
     self.PhilToJsRender('NGL_HKLviewer.action = reset_view')
 
 
+  def onDrawReciprocUnitCellBoxClick(self):
+    if not self.unfeedback:
+      if self.DrawReciprocUnitCellBox.isChecked():
+        val = self.reciprocunitcellslider.value()/self.reciprocunitcellslider.maximum()
+        self.PhilToJsRender("NGL_HKLviewer.reciprocal_unit_cell_scale_fraction = %f" %val)
+      else:
+        self.PhilToJsRender("NGL_HKLviewer.reciprocal_unit_cell_scale_fraction = None")
+
+
+  def onDrawUnitCellBoxClick(self):
+    if not self.unfeedback:
+      if self.DrawRealUnitCellBox.isChecked():
+        val = self.unitcellslider.value()/self.unitcellslider.maximum()
+        self.PhilToJsRender("NGL_HKLviewer.real_space_unit_cell_scale_fraction = %f" %val)
+      else:
+        self.PhilToJsRender("NGL_HKLviewer.real_space_unit_cell_scale_fraction = None")
+
+
   def onUnitcellScale(self):
     if self.unfeedback:
       return
-    self.PhilToJsRender("NGL_HKLviewer.show_real_space_unit_cell = %f" %self.unitcellslider.value())
+    val = self.unitcellslider.value()/self.unitcellslider.maximum()
+    self.PhilToJsRender("NGL_HKLviewer.real_space_unit_cell_scale_fraction = %f" %val)
 
 
   def onReciprocUnitcellScale(self):
     if self.unfeedback:
       return
-    self.PhilToJsRender("NGL_HKLviewer.show_reciprocal_unit_cell = %f" %self.reciprocunitcellslider.value())
+    val = self.reciprocunitcellslider.value()/self.reciprocunitcellslider.maximum()
+    self.PhilToJsRender("NGL_HKLviewer.reciprocal_unit_cell_scale_fraction = %f" %val)
 
 
   def DebugInteractively(self):
@@ -1420,16 +1364,23 @@ def run():
         # some useful flags as per https://doc.qt.io/qt-5/qtwebengine-debugging.html
         os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = "--remote-debugging-port=9742 --single-process --js-flags='--expose_gc'"
 
-    print("testing if WebGL works in QWebEngineView....")
-    cmdargs = [ sys.executable, QtChromiumCheck.__file__ ]
-    webglproc = subprocess.Popen( cmdargs, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    procout, procerr = webglproc.communicate()
+    settings = QSettings("CCTBX", "HKLviewer" )
+    settings.beginGroup("SomeSettings")
+    QWebEngineViewFlags = settings.value("QWebEngineViewFlags", None)
+    settings.endGroup()
 
-    #import code, traceback; code.interact(local=locals(), banner="".join( traceback.format_stack(limit=10) ) )
-
-    if not "WebGL=True" in procout.decode():
-      print("using additional flags for QWebEngineView")
-      os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] += " --enable-webgl-software-rendering --ignore-gpu-blacklist"
+    if QWebEngineViewFlags is None: # avoid doing this test over and over again on the same PC
+      QWebEngineViewFlags = ""
+      print("testing if WebGL works in QWebEngineView....")
+      cmdargs = [ sys.executable, QtChromiumCheck.__file__ ]
+      webglproc = subprocess.Popen( cmdargs, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+      procout, procerr = webglproc.communicate()
+      #import code, traceback; code.interact(local=locals(), banner="".join( traceback.format_stack(limit=10) ) )
+      if not "WebGL works" in procout.decode():
+        QWebEngineViewFlags = " --enable-webgl-software-rendering --ignore-gpu-blacklist"
+    if "verbose" in sys.argv[1:]:
+      print("using flags for QWebEngineView: " + QWebEngineViewFlags)
+    os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] += QWebEngineViewFlags
 
     app = QApplication(sys.argv)
     guiobj = NGL_HKLViewer(app)
@@ -1438,6 +1389,12 @@ def run():
     timer.timeout.connect(guiobj.ProcessMessages)
     timer.start()
     ret = app.exec_()
+
+    settings = QSettings("CCTBX", "HKLviewer" )
+    settings.beginGroup("SomeSettings")
+    QWebEngineViewFlags = settings.setValue("QWebEngineViewFlags", QWebEngineViewFlags)
+    settings.endGroup()
+
     sys.exit(ret)
   except Exception as e:
     print( str(e)  +  traceback.format_exc(limit=10) )

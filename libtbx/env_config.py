@@ -720,7 +720,7 @@ Wait for the command to finish, then try again.""" % vars())
 
   def find_dist_path(self, module_name, optional=False,
                      return_relocatable_path=False):
-    if module_name=='amber': optional=True
+    if module_name=='amber': return None # because amber_adaptbx is not an adapter
     dist_path = self.command_line_redirections.get(module_name, None)
     if (dist_path is not None):
       return dist_path.self_or_abs_if(return_relocatable_path)
@@ -1702,7 +1702,7 @@ selfx:
     except ImportError:
       return
     if self.build_options.use_conda:
-      bin_directory = os.path.normpath(os.path.join(get_conda_prefix(), "bin"))
+      bin_directory = os.path.normpath(os.path.join(sys.prefix, "bin"))
     else:
       try:
         bin_directory = self.get_setuptools_script_dir()
@@ -1841,7 +1841,10 @@ selfx:
     # Resolve python dependencies in advance of potential use in refresh scripts
     # Lazy-load the import here as we might not have an environment before this
     from . import pkg_utils
-    pkg_utils.resolve_module_python_dependencies(self.module_list)
+    if self.build_options.use_conda:
+      pkg_utils.resolve_module_conda_dependencies(self.module_list)
+    else:
+      pkg_utils.resolve_module_python_dependencies(self.module_list)
 
     for path in self.pythonpath:
       sys.path.insert(0, abs(path))
@@ -1880,6 +1883,8 @@ selfx:
 class module:
   """
   Attributes:
+    conda_required (List[str]):
+      List of conda package requirement specifiers. Should match PEP508-style.
     python_required (List[str]):
       List of python package requirement specifiers. Should match PEP508-style.
   """
@@ -1897,6 +1902,7 @@ class module:
       self.names = [name, name + mate_suffix]
       if (dist_path is not None):
         self.dist_paths = [dist_path, None]
+    self.conda_required = []
     self.python_required = []
 
   def names_active(self):
@@ -1932,6 +1938,7 @@ class module:
     self.exclude_from_binary_bundle = []
     dist_paths = []
     self.extra_command_line_locations = []
+    self.conda_required = []
     self.python_required = []
     for dist_path in self.dist_paths:
       if (dist_path is not None):
@@ -1973,6 +1980,7 @@ class module:
             "modules_required_for_build", []))
           self.required_for_use.extend(config.get(
             "modules_required_for_use", []))
+          self.conda_required.extend(config.get("conda_required", []))
           self.python_required.extend(config.get("python_required", []))
           self.optional.extend(config.get(
             "optional_modules", []))
